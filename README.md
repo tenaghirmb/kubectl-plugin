@@ -27,9 +27,9 @@ kubectl plugin list
 
 Supports 
 
-1. fast ssh onto kubernetes nodes and 
+1. fast ssh onto kubernetes nodes 
 
-2. nsenter into any pod's container linux namespace.
+2. nsenter into any pod's container linux namespace
 
 > Some dir paths might need revising according to actual situation.
 
