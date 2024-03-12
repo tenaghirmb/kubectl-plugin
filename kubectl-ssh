@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+
+set -e
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit 1
+}
+
+ssh_node() {
+  node=$1
+  shift
+  if [ "$node" = "" ]; then
+    node=$(kubectl get node -o name "$@" | sed 's/node\///' | tr '\n' ' ')
+    node=${node::-1}
+
+    if [[ "$node" =~ " " ]]; then
+      echo "Node name must be specified. Choose one of: [$node]"
+      exit 1
+    else
+      echo "Single-node cluster detected. Defaulting to node $node"
+    fi
+  fi
+
+  if [ $# -eq 1 ]; then
+    command="$1"
+    shift
+  fi
+
+  ns=default
+  pod=$(
+    kubectl create -n "$ns" -o name "$@" -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: ssh-node-
+  labels:
+    plugin: ssh-node
+spec:
+  nodeName: $node
+  containers:
+  - name: ssh-node
+    image: centos:centos7
+    imagePullPolicy: IfNotPresent
+    command: ["chroot", "/host"]
+    tty: true
+    stdin: true
+    stdinOnce: true
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: host
+      mountPath: /host
+  volumes:
+  - name: host
+    hostPath:
+      path: /
+  hostNetwork: true
+  hostIPC: true
+  hostPID: true
+  restartPolicy: Never
+  tolerations:
+    - operator: "Exists"
+EOF
+  )
+
+  deletePod() {
+    kubectl delete -n "$ns" "$pod" "$@" --wait=false
+  }
+  trap deletePod EXIT INT TERM
+
+  echo "Created $pod"
+  echo "Waiting for container to start..."
+  kubectl wait -n "$ns" --for=condition=Ready --timeout 60s "$pod" "$@" >/dev/null
+
+  if [ -z "$command" ]; then
+    kubectl attach -n "$ns" -it "$pod" -c ssh-node "$@"
+  else
+    kubectl exec -n "$ns" -it "$pod" ssh-node -- "$command"
+  fi
+}
+
+nsenter_pod() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      -n|--namespace)
+        if [ "$2" ]; then
+          namespace=$2
+          shift
+        else
+          die '"--namespace" requires a non-empty option'
+        fi
+        ;;
+      --namespace=?*)
+        namespace=${1#*=}
+        ;;
+      --namespace=)
+        die '"--namespace" requires a non-empty option'
+        ;;
+      -c|--container)
+        if [ "$2" ]; then
+          container_name=$2
+          shift
+        else
+          die '"--container" requires a non-empty option'
+        fi
+        ;;
+      --container=?*)
+        container_name=${1#*=}
+        ;;
+      --container=)
+        die '"--container" requires a non-empty option'
+        ;;
+      # handle unknown arguments as positional and save for later use
+      *)
+        pods+=("$1")
+        ;;
+    esac
+    shift
+  done
+
+  if [[ "${#pods[@]}" -ne 1 ]]; then
+    die "Error: kubectl nsenter needs one pod name as argument"
+  fi
+
+  pod0="${pods[0]}"
+  node=$(kubectl -n "$namespace" get pod "$pod0" -o go-template --template='{{.spec.nodeName}}')
+
+  ns=default
+  pod=$(
+    kubectl create -n "$ns" -o name "$@" -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: ssh-node-
+  labels:
+    plugin: ssh-node
+spec:
+  nodeName: $node
+  containers:
+  - name: ssh-node
+    image: centos:centos7
+    imagePullPolicy: IfNotPresent
+    command: ["chroot", "/host"]
+    tty: true
+    stdin: true
+    stdinOnce: true
+    securityContext:
+      privileged: true
+    volumeMounts:
+    - name: host
+      mountPath: /host
+  volumes:
+  - name: host
+    hostPath:
+      path: /
+  hostNetwork: true
+  hostIPC: true
+  hostPID: true
+  restartPolicy: Never
+  tolerations:
+    - operator: "Exists"
+EOF
+  )
+
+  deletePod() {
+    kubectl exec -n "$ns" -it "$pod" -- bash -c "rm -f /host/pod_id /host/container_id /host/target_pid"
+    kubectl delete -n "$ns" "$pod" --wait=false
+  }
+  trap deletePod EXIT INT TERM
+
+  echo "Created $pod"
+  echo "Waiting for container to start..."
+  kubectl wait -n "$ns" --for=condition=Ready --timeout 60s "$pod" "$@" >/dev/null
+
+  if [[ -v container_name ]]; then
+    command1="\
+#!/bin/bash\n\
+cat <<- EOF | chroot /host\n\
+    crictl pods --namespace $namespace --name $pod0 --state Ready --quiet > pod_id\n\
+EOF"
+    command2="\
+#!/bin/bash\n\
+cat <<- EOF | chroot /host\n\
+    crictl ps -p \$(cat /host/pod_id) --no-trunc --label io.kubernetes.container.name=$container_name -q > container_id\n\
+EOF"
+    command3="\
+#!/bin/bash\n\
+cat <<- EOF | chroot /host\n\
+    crictl inspect \$(cat /host/container_id) | jq .info.pid > target_pid\n\
+EOF"
+    command4="\
+#!/bin/bash\n\
+    /host/usr/bin/nsenter --target \$(cat /host/target_pid) --uts --net --pid unshare --mount-proc sh -c \"cd /host/run/containerd/io.containerd.runtime.v2.task/k8s.io/\$(cat /host/container_id)/rootfs && exec bash\"\n\
+"
+
+  else
+    echo "No container specified, calling nsenter on sandbox sleep container"
+    command1="\
+#!/bin/bash\n\
+cat <<- EOF | chroot /host\n\
+    crictl pods --namespace $namespace --name $pod0 --state Ready --quiet > pod_id\n\
+EOF"
+    command2="\
+#!/bin/bash\n\
+cat <<- EOF | chroot /host\n\
+    pod_id=\$(cat /host/pod_id)\n\
+    crictl inspect \$(cat /host/pod_id) | jq .info.pid > target_pid\n\
+EOF"
+    command3="\
+#!/bin/bash\n\
+    /host/usr/bin/nsenter --target \$(cat /host/target_pid) --uts --net bash\n
+"
+  fi
+
+  kubectl exec -n "$ns" -it "$pod" -- echo -e "$command1" > /tmp/exec_script1.sh && echo -e "$command2" > /tmp/exec_script2.sh && echo -e "$command3" > /tmp/exec_script3.sh
+  if [ -n "$command4" ]; then
+    kubectl exec -n "$ns" -it "$pod" -- echo -e "$command4" > /tmp/exec_script4.sh
+  fi
+  kubectl cp /tmp/exec_script1.sh "$ns"/${pod/pod\//}:/tmp
+  kubectl cp /tmp/exec_script2.sh "$ns"/${pod/pod\//}:/tmp
+  kubectl cp /tmp/exec_script3.sh "$ns"/${pod/pod\//}:/tmp
+  if [ -n "$command4" ]; then
+    kubectl cp /tmp/exec_script4.sh "$ns"/${pod/pod\//}:/tmp
+  fi
+  kubectl exec -n "$ns" -it "$pod" -- bash -c "dos2unix /tmp/exec_script*.sh && chmod +x /tmp/exec_script*.sh" > /dev/null
+  if [ -n "$command4" ]; then
+    kubectl exec -n "$ns" -it "$pod" -- bash -c "/tmp/exec_script1.sh && /tmp/exec_script2.sh && /tmp/exec_script3.sh" > /dev/null
+    kubectl exec -n "$ns" -it "$pod" -- bash -c "/tmp/exec_script4.sh"
+  else
+    kubectl exec -n "$ns" -it "$pod" -- bash -c "/tmp/exec_script1.sh && /tmp/exec_script2.sh" > /dev/null
+    kubectl exec -n "$ns" -it "$pod" -- bash -c "/tmp/exec_script3.sh"
+  fi
+  exit 0
+}
+
+print_usage() {
+  echo "Provider-agnostic way of opening a remote shell to a Kubernetes node."
+  echo
+  echo "Enables you to access a node even when it doesn't run an SSH server or"
+  echo "when you don't have the required credentials. Also, the way you log in"
+  echo "is always the same, regardless of what provides the Kubernetes cluster"
+  echo "(e.g. Minikube, Kind, Docker Desktop, GKE, AKS, EKS, ...)"
+  echo
+  echo "You must have cluster-admin rights to use this plugin."
+  echo
+  echo "The primary focus of this plugin is to provide access to nodes, but it"
+  echo "also provides a quick way of running a shell inside a pod."
+  echo
+  echo "Examples: "
+  echo "  # Open a shell to node of a single-node cluster (e.g. Docker Desktop)"
+  echo "  kubectl ssh node"
+  echo
+  echo "  # Open a shell to node of a multi-node cluster (e.g. GKE)"
+  echo "  kubectl ssh node my-worker-node-1"
+  echo
+  echo "  # Execute the command ls on a node my-worker-node-1"
+  echo "  kubectl ssh node my-worker-node-1 ls"
+  echo
+  echo "  # Nsenter into network namespace of a pod"
+  echo "  kubectl ssh pod my-pod"
+  echo
+  echo "Usage:"
+  echo "  kubectl ssh node [nodeName] [command]"
+  echo "  kubectl ssh pod [podName] [-n namespace] [-c container]"
+  exit 0
+}
+
+while [ $# -gt 0 ]; do
+  key="$1"
+
+  case $key in
+  -h | --help)
+    print_usage
+    ;;
+  node/*)
+    nodeName=${1:5}
+    shift
+    ssh_node "$nodeName" "$@"
+    ;;
+  node)
+    shift
+    case "$1" in
+    -*) nodeName="";;
+    "") ;;
+    *) nodeName="$1"; shift ;;
+    esac
+
+    ssh_node "$nodeName" "$@"
+    ;;
+  pod)
+    shift
+    nsenter_pod "$@"
+    ;;
+  *)
+    print_usage
+    ;;
+  esac
+done
