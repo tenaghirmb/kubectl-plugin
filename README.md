@@ -24,7 +24,7 @@ A plugin is a standalone executable file, whose name begins with `kubectl-`. To 
 
 ```bash
 # Clone the repo
-git clone [https://github.com/tenaghirmb/kubectl-plugin.git](https://github.com/tenaghirmb/kubectl-plugin.git)
+git clone https://github.com/tenaghirmb/kubectl-plugin.git
 
 # Inject into system path
 sudo chmod +x ./kubectl-ssh
