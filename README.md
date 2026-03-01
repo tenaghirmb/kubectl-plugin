@@ -1,29 +1,44 @@
-# kubectl-plugins
+# ☸️ kubectl-plugins
 
-## Introduction
+> **SYSTEM STATUS:** `[ ACTIVE_EXPANSION ]`  
+> **INTERFACE:** `Kubernetes API v1.28+`  
+> **UPTIME:** `Continuous synchronization with cluster logic`
 
-A collection of plugins for kubectl integration.
+---
 
-## Installing kubectl plugins
+## 🌌 Overview
+This repository serves as a **Tactical Command Nexus** for custom `kubectl` extensions. Designed to bypass standard orchestration limits, these plugins provide high-fidelity diagnostic data and streamlined resource manipulation.
 
+
+
+## 🔌 Available Modules
+| Extension | Status | Function |
+| :--- | :--- | :--- |
+| `kubectl-ssh` | 🟢 Stable | Swift ssh and quick nsenter |
+| `kubectl-ctx-switch` | 🟡 Beta | Context-aware namespace pivoting |
+| `kubectl-trace-log` | 🔴 Dev | Real-time pod-to-node signal tracing |
+
+
+## 🛠️ Installation
 A plugin is a standalone executable file, whose name begins with `kubectl-`. To install a plugin, move its executable file to anywhere on your `PATH`.
 
-### Example
+```bash
+# Clone the repo
+git clone [https://github.com/tenaghirmb/kubectl-plugin.git](https://github.com/tenaghirmb/kubectl-plugin.git)
 
-```shell
+# Inject into system path
 sudo chmod +x ./kubectl-ssh
-
 sudo mv ./kubectl-ssh /usr/local/bin
-```
-## Checking for plugin warnings
 
-You can use `kubectl plugin list` command to ensure that your plugin is visible by `kubectl`, and verify that there are no warnings preventing it from being called as a `kubectl` command.
-
-```shell
+# Check for plugin warnings and make sure plugins are visible by `kubectl`
 kubectl plugin list
 ```
 
-## kubectl ssh
+---
+
+## 📄 Instructions
+
+### ❶ kubectl ssh
 
 Supports 
 
@@ -33,7 +48,7 @@ Supports
 
 > Some dir paths might need revising according to actual situation.
 
-### Usage
+#### Usage
 
 Provider-agnostic way of opening a remote shell to a Kubernetes node.
 
