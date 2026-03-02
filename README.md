@@ -1,5 +1,8 @@
 # ☸️ kubectl-plugins
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org)
+[![BuyMeACoffee](https://raw.githubusercontent.com/pachadotdev/buymeacoffee-badges/main/bmc-donate-yellow.svg)](https://www.buymeacoffee.com/tenaghirmb)
+
 > **SYSTEM STATUS:** `[ ACTIVE_EXPANSION ]`  
 > **INTERFACE:** `Kubernetes API v1.28+`  
 > **UPTIME:** `Continuous synchronization with cluster logic`
